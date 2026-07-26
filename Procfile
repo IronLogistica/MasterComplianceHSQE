@@ -1,1 +1,1 @@
-web: gunicorn 'app:create_app()'
+web: python seed.py && gunicorn 'app:create_app()'
