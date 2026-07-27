@@ -1,210 +1,216 @@
-import os
-import uuid
-from datetime import date, datetime
-
-from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, send_from_directory, url_for
+import csv
+from datetime import datetime
+from io import StringIO
+from flask import Blueprint, abort, flash, redirect, render_template, request, url_for, Response
 from flask_login import current_user, login_required
-from openpyxl import Workbook
-
 from ..extensions import db
-from ..models import Anomaly, PPEIssue, TrainingRecord
-from ..models_environment import ConsumptionReading, WasteRecord
-from ..models_esg import ESGIndicator, ESGMeasurement, ESGReport, ESGTarget
-from ..models_sa8000 import SA8000CorrectiveAction, SA8000NonConformity, SA8000Report
+from ..models_esg import (ESGReport, ESGMetric, ESGSectionContent, ESGTopic, ESGActionPlan,
+                      ESGStakeholderEngagement, ESGProcessIntegration, ESGApproval)
 
 esg_bp = Blueprint("esg", __name__, url_prefix="/esg")
+STATUS = ("bozza", "raccolta_dati", "in_revisione", "restituito", "approvato", "pubblicato")
+SECTIONS = [
+ ("commitment", "Impegno della direzione"), ("organization", "1. Organizzazione e criteri di rendicontazione"),
+ ("value_chain", "2. Attività, modello operativo e catena del valore"), ("people", "3. Persone e lavoro nella catena del valore"),
+ ("governance", "4. Governance e condotta d'impresa"), ("strategy", "5. Strategia, policy e temi materiali"),
+ ("results", "6. Risultati dell'esercizio: azioni, KPI e target"), ("integration", "7. Integrazione ESG nei processi di gestione"),
+ ("plan", "8. Piano di miglioramento dell'esercizio successivo"), ("policies", "Allegato A — Policy"),
+ ("index", "Allegato B — Indice di contenuti e riferimenti"), ("methodology", "Allegato C — Metodologia e glossario"),
+ ("approval", "Approvazione e firme")]
 
-UPLOAD_SUBDIR = os.path.join("uploads", "esg")
+def owner():
+    if not current_user.is_authenticated or not current_user.is_owner: abort(403)
+def text(k): return request.form.get(k, "").strip() or None
+def number(k):
+    raw=text(k)
+    if not raw: return None
+    try: return float(raw.replace(",", "."))
+    except ValueError: raise ValueError("I valori KPI devono essere numerici.")
+def get_report(rid): return db.get_or_404(ESGReport, rid)
+def editable(r):
+    if r.status in ("approvato", "pubblicato"):
+        raise ValueError("Il rapporto è approvato/pubblicato: riaprirlo prima di modificare i contenuti.")
+def placeholder(): return bool(request.form.get("is_placeholder"))
 
+def seed_report(r):
+    editable(r)
+    if r.sections: return False
+    generic = {
+      "commitment":"La Direzione di [RAGIONE SOCIALE] considera risultati durevoli, persone, risorse e integrità come elementi interdipendenti. Questo rapporto descrive dati disponibili, priorità e prossimi passi e sarà riesaminato con cadenza [FREQUENZA].",
+      "organization":"Il documento definisce perimetro, periodo, fonti e limiti della rendicontazione. Le informazioni devono essere confermate dall'organizzazione prima dell'approvazione.",
+      "value_chain":"La mappa di filiera deve identificare fasi a monte, operazioni proprie e fasi a valle, con rischi, impatti e leve di influenza proporzionate.",
+      "people":"L'organizzazione monitora condizioni di lavoro, competenze, sicurezza e inclusione. Gli indicatori sono da completare con definizioni, copertura e limiti.",
+      "governance":"Ruoli, deleghe, codice etico, canali di segnalazione e controlli devono essere descritti in base agli assetti effettivamente adottati.",
+      "strategy":"La priorità dei temi deriva da dialogo con stakeholder, analisi di impatti e rischi/opportunità. I temi sotto riportati sono candidati e non sono già approvati.",
+      "results":"Per ogni tema materiale occorre indicare KPI, confronto, metodologia, fonte, azioni, scostamenti e prossimi passi; ND non equivale a zero.",
+      "integration":"I presidi ESG si integrano nei processi di acquisto, persone, sicurezza, ambiente, progetti, amministrazione e riesame direzionale.",
+      "plan":"Gli obiettivi devono essere SMART, con baseline, responsabile, risorse, scadenza e verifica documentata.",
+      "policies":"Inserire qui policy ESG o il riferimento al documento controllato approvato dall'organizzazione.",
+      "index":"Riferimenti GRI o altri standard sono una mappa selezionata; non dichiarano conformità senza una verifica applicabile.",
+      "methodology":"Definire confini, formule, basi di intensità, fonti, qualità dei dati, fattori di conversione, rettifiche e glossario.",
+      "approval":"L'approvazione nell'app è una registrazione interna. Per esigenze di firma elettronica o legale usare il processo esterno adottato dal cliente."}
+    for n,(code,title) in enumerate(SECTIONS): db.session.add(ESGSectionContent(report_id=r.id,section_code=code,title=title,body=generic[code],is_placeholder=True,sort_order=n))
+    topics=[("E.ENERGY","Efficienza nell'uso di energia e risorse","E"),("S.SAFETY","Salute, sicurezza e benessere","S"),("S.WORK","Competenze e lavoro dignitoso","S"),("G.ETHICS","Integrità, etica e catena responsabile","G")]
+    for n,(code,title,p) in enumerate(topics): db.session.add(ESGTopic(report_id=r.id,code=code,title=title,pillar=p,description="Tema candidato da valutare con stakeholder e analisi documentata.",priority_level="da valutare",is_placeholder=True,sort_order=n))
+    catalog=[("E","E.ENERGY.ELECTRICITY","Elettricità acquistata","kWh"),("E","E.ENERGY.FUELS","Combustibili per tipo","kWh o litri"),("E","E.GHG.S1","Emissioni Scope 1","tCO2e"),("E","E.GHG.S2","Emissioni Scope 2","tCO2e"),("E","E.WATER","Prelievo idrico","m³"),("E","E.WASTE","Rifiuti prodotti","kg"),("S","S.WORKFORCE.FTE","FTE medi","FTE"),("S","S.TRAIN.HOURS","Ore di formazione","ore"),("S","S.HS.HOURS","Ore lavorate","ore"),("S","S.HS.INCIDENTS","Infortuni registrabili","numero"),("S","S.HS.LTIFR","Tasso infortuni","per 1.000.000 ore"),("S","S.GRIEVANCES","Segnalazioni aggregate","numero"),("G","G.ESG.GOVERNANCE","Riesami ESG","numero"),("G","G.ETHICS.TRAINING","Formazione etica completata","%"),("G","G.SUPPLIERS.ESG_SCREENED","Fornitori critici valutati ESG","%"),("G","G.WHISTLEBLOWING","Segnalazioni whistleblowing aggregate","numero")]
+    for n,(p,c,name,u) in enumerate(catalog): db.session.add(ESGMetric(report_id=r.id,pillar=p,code=c,name=name,unit=u,data_quality="ND",methodology="DA PERSONALIZZARE — definire metodo e perimetro",source_ref="DA PERSONALIZZARE — indicare evidenza",note="Dato non disponibile: completare o motivare.",is_placeholder=True,sort_order=n))
+    for category in ("Persone e lavoratori", "Clienti e utilizzatori", "Fornitori e partner", "Comunità e istituzioni"):
+        db.session.add(ESGStakeholderEngagement(report_id=r.id,category=category,channel="DA PERSONALIZZARE",period="DA PERSONALIZZARE",expectations="Raccogliere aspettative e temi rilevanti.",response="Restituire esiti e azioni.",is_placeholder=True))
+    for proc in ("Acquisti", "Persone e formazione", "Salute, sicurezza e ambiente", "Riesame direzionale"):
+        db.session.add(ESGProcessIntegration(report_id=r.id,process=proc,owner="DA PERSONALIZZARE",control="Definire presidio ESG e controllo.",frequency="DA PERSONALIZZARE",evidence_ref="DA PERSONALIZZARE",outcome="Da verificare",is_placeholder=True))
+    for title, kpi in (("Definire priorità ESG", "G.ESG.GOVERNANCE"),("Migliorare la qualità dei dati", "G.DATA_QUALITY"),("Valutare efficienza delle risorse", "E.ENERGY.ELECTRICITY")):
+        db.session.add(ESGActionPlan(report_id=r.id,title=title,objective="DA PERSONALIZZARE — definire un obiettivo SMART",kpi_code=kpi,baseline="ND",target="DA PERSONALIZZARE",responsible="DA PERSONALIZZARE",status="pianificato",verification="DA PERSONALIZZARE",is_placeholder=True))
+    return True
 
-def owner_only():
-    if not current_user.is_owner:
-        abort(403)
-
-
-def _upload_folder():
-    path = os.path.join(current_app.static_folder, UPLOAD_SUBDIR)
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
-def _auto_kpis_for_year(year):
-    """KPI ricavati automaticamente dagli altri moduli, per un dato anno."""
-    start = date(year, 1, 1)
-    end = date(year, 12, 31)
-    training_hours_proxy = TrainingRecord.query.filter(
-        TrainingRecord.completed_on >= start, TrainingRecord.completed_on <= end
-    ).count()
-    ppe_issued = PPEIssue.query.filter(PPEIssue.issued_on >= start, PPEIssue.issued_on <= end).count()
-    quality_anomalies_open = Anomaly.query.filter(Anomaly.status != "chiusa").count()
-    sa8000_reports_open = SA8000Report.query.filter(SA8000Report.status != "chiusa").count()
-    sa8000_ncs_open = SA8000NonConformity.query.filter(SA8000NonConformity.status != "chiusa").count()
-    sa8000_actions_pending = SA8000CorrectiveAction.query.filter(
-        SA8000CorrectiveAction.status.notin_(["completata", "verificata_efficace"])
-    ).count()
-    waste_kg = (
-        db.session.query(db.func.coalesce(db.func.sum(WasteRecord.quantity_kg), 0))
-        .filter(WasteRecord.disposal_date >= start, WasteRecord.disposal_date <= end)
-        .scalar()
-    )
-    consumption_by_resource = (
-        db.session.query(ConsumptionReading.resource_type, db.func.coalesce(db.func.sum(ConsumptionReading.quantity), 0))
-        .filter(ConsumptionReading.period_start >= start, ConsumptionReading.period_start <= end)
-        .group_by(ConsumptionReading.resource_type)
-        .all()
-    )
-    return {
-        "S · Corsi formazione completati nell'anno": training_hours_proxy,
-        "S · DPI consegnati nell'anno": ppe_issued,
-        "G · Non conformità qualità aperte (attuale)": quality_anomalies_open,
-        "S · Segnalazioni SA8000 aperte (attuale)": sa8000_reports_open,
-        "S · Non conformità SA8000 aperte (attuale)": sa8000_ncs_open,
-        "S · Azioni correttive SA8000 in sospeso (attuale)": sa8000_actions_pending,
-        "E · Rifiuti prodotti nell'anno (kg)": round(waste_kg or 0, 1),
-        **{f"E · Consumo {res} nell'anno": round(qty, 1) for res, qty in consumption_by_resource},
-    }
-
-
-@esg_bp.route("/")
+@esg_bp.route("/", methods=["GET","POST"])
 @login_required
-def dashboard():
-    owner_only()
-    indicators = ESGIndicator.query.order_by(ESGIndicator.pillar, ESGIndicator.code).all()
-    current_year = date.today().year
-    auto_kpis = _auto_kpis_for_year(current_year)
-    reports = ESGReport.query.order_by(ESGReport.year.desc()).all()
-    return render_template(
-        "esg/dashboard.html",
-        indicators=indicators,
-        auto_kpis=auto_kpis,
-        current_year=current_year,
-        reports=reports,
-    )
+def reports():
+    owner()
+    if request.method == "POST":
+        try:
+            year=int(request.form.get("year",""));
+            if not 2000 <= year <= 2100: raise ValueError("Inserisci un anno valido.")
+            if ESGReport.query.filter_by(year=year).first(): raise ValueError("Esiste già un rapporto per questo anno.")
+            r=ESGReport(year=year,title=text("title") or "Rapporto di sostenibilità",legal_name=text("legal_name"),report_type=text("report_type") or "Rapporto volontario ESG")
+            db.session.add(r); db.session.flush()
+            if request.form.get("seed"): seed_report(r)
+            db.session.commit(); flash("Rapporto ESG creato.","success")
+        except ValueError as e: db.session.rollback(); flash(str(e),"error")
+        return redirect(url_for("esg.reports"))
+    return render_template("esg/reports.html",items=ESGReport.query.order_by(ESGReport.year.desc()).all())
 
-
-@esg_bp.route("/indicatori")
+@esg_bp.post("/<int:report_id>/seed")
 @login_required
-def indicators():
-    owner_only()
-    items = ESGIndicator.query.order_by(ESGIndicator.pillar, ESGIndicator.code).all()
-    return render_template("esg/indicatori.html", indicators=items)
-
-
-@esg_bp.post("/indicatori")
-@login_required
-def create_indicator():
-    owner_only()
-    indicator = ESGIndicator(
-        pillar=request.form.get("pillar", "E"),
-        code=request.form.get("code", "").strip(),
-        name=request.form.get("name", "").strip(),
-        unit=request.form.get("unit", "").strip() or None,
-        description=request.form.get("description", "").strip() or None,
-    )
-    if not indicator.code or not indicator.name:
-        flash("Indica codice e nome dell'indicatore.", "error")
-        return redirect(url_for("esg.indicators"))
-    db.session.add(indicator)
-    db.session.commit()
-    flash("Indicatore ESG creato.", "success")
-    return redirect(url_for("esg.indicators"))
-
-
-@esg_bp.post("/indicatori/<int:indicator_id>/misurazioni")
-@login_required
-def create_measurement(indicator_id):
-    owner_only()
-    indicator = db.get_or_404(ESGIndicator, indicator_id)
+def seed(report_id):
+    owner(); r=get_report(report_id)
     try:
-        value = float(request.form.get("value", 0))
-        period_year = int(request.form.get("period_year", date.today().year))
-    except ValueError:
-        flash("Valore o anno non validi.", "error")
-        return redirect(url_for("esg.indicators"))
-    measurement = ESGMeasurement(
-        indicator_id=indicator.id,
-        period_year=period_year,
-        value=value,
-        source_note=request.form.get("source_note", "").strip() or None,
-    )
-    db.session.add(measurement)
-    db.session.commit()
-    flash("Misurazione registrata.", "success")
-    return redirect(url_for("esg.indicators"))
+        if seed_report(r): db.session.commit(); flash("Baseline generico creato: ogni contenuto è DA PERSONALIZZARE.","success")
+        else: flash("Il rapporto contiene già il baseline; nessun dato è stato sovrascritto.","error")
+    except ValueError as e: flash(str(e),"error")
+    return redirect(url_for("esg.dashboard",report_id=r.id))
 
-
-@esg_bp.post("/indicatori/<int:indicator_id>/obiettivi")
+@esg_bp.route("/<int:report_id>")
 @login_required
-def create_target(indicator_id):
-    owner_only()
-    indicator = db.get_or_404(ESGIndicator, indicator_id)
-    try:
-        target_value = float(request.form.get("target_value", 0))
-        target_year = int(request.form.get("target_year", date.today().year + 1))
-    except ValueError:
-        flash("Valore obiettivo o anno non validi.", "error")
-        return redirect(url_for("esg.indicators"))
-    target = ESGTarget(
-        indicator_id=indicator.id,
-        target_value=target_value,
-        target_year=target_year,
-        note=request.form.get("note", "").strip() or None,
-    )
-    db.session.add(target)
-    db.session.commit()
-    flash("Obiettivo ESG registrato.", "success")
-    return redirect(url_for("esg.indicators"))
+def dashboard(report_id):
+    owner(); r=get_report(report_id)
+    return render_template("esg/report_dashboard.html",report=r,sections=SECTIONS, placeholders=sum(x.is_placeholder for x in r.sections)+sum(x.is_placeholder for x in r.metrics))
 
-
-@esg_bp.post("/report/genera")
+@esg_bp.route("/<int:report_id>/metadata",methods=["GET","POST"])
 @login_required
-def generate_report():
-    owner_only()
-    try:
-        year = int(request.form.get("year", date.today().year))
-    except ValueError:
-        flash("Anno non valido.", "error")
-        return redirect(url_for("esg.dashboard"))
+def metadata(report_id):
+    owner(); r=get_report(report_id)
+    if request.method=="POST":
+        try:
+            editable(r)
+            for f in ("title","legal_name","report_type","reporting_boundary","currency","reporting_framework","contact_email","methodology_note","management_statement","notes"): setattr(r,f,text(f))
+            for f in ("reporting_period_start","reporting_period_end"):
+                raw=text(f); setattr(r,f,datetime.strptime(raw,"%Y-%m-%d").date() if raw else None)
+            db.session.commit();flash("Metadati aggiornati.","success")
+        except ValueError as e: db.session.rollback();flash(str(e),"error")
+        return redirect(url_for("esg.metadata",report_id=r.id))
+    return render_template("esg/metadata.html",report=r)
 
-    wb = Workbook()
-    ws_kpi = wb.active
-    ws_kpi.title = "KPI automatici"
-    ws_kpi.append(["Indicatore", "Valore", "Anno"])
-    for name, value in _auto_kpis_for_year(year).items():
-        ws_kpi.append([name, value, year])
-
-    ws_ind = wb.create_sheet("Indicatori manuali")
-    ws_ind.append(["Pilastro", "Codice", "Nome", "Unità", "Valore anno", "Obiettivo", "Anno obiettivo"])
-    for indicator in ESGIndicator.query.order_by(ESGIndicator.pillar, ESGIndicator.code).all():
-        measurement = next((m for m in indicator.measurements if m.period_year == year), None)
-        target = next((t for t in indicator.targets if t.target_year >= year), None)
-        ws_ind.append([
-            indicator.pillar,
-            indicator.code,
-            indicator.name,
-            indicator.unit or "",
-            measurement.value if measurement else "",
-            target.target_value if target else "",
-            target.target_year if target else "",
-        ])
-
-    filename = f"bilancio-esg-{year}-{uuid.uuid4().hex[:8]}.xlsx"
-    wb.save(os.path.join(_upload_folder(), filename))
-    file_path = f"{UPLOAD_SUBDIR}/{filename}".replace("\\", "/")
-
-    report = ESGReport(year=year, file_path=file_path, generated_at=datetime.utcnow())
-    db.session.add(report)
-    db.session.commit()
-    flash(f"Bilancio ESG {year} generato.", "success")
-    return redirect(url_for("esg.dashboard"))
-
-
-@esg_bp.route("/report/<int:report_id>/scarica")
+@esg_bp.route("/<int:report_id>/sections/<code>",methods=["GET","POST"])
 @login_required
-def download_report(report_id):
-    owner_only()
-    report = db.get_or_404(ESGReport, report_id)
-    if not report.file_path:
-        abort(404)
-    directory = current_app.static_folder
-    return send_from_directory(directory, report.file_path, as_attachment=True)
+def section(report_id,code):
+    owner(); r=get_report(report_id); sec=ESGSectionContent.query.filter_by(report_id=r.id,section_code=code).first_or_404()
+    if request.method=="POST":
+        try:
+            editable(r);sec.title=text("title") or sec.title;sec.body=text("body");sec.is_placeholder=placeholder();db.session.commit();flash("Sezione salvata.","success")
+        except ValueError as e:flash(str(e),"error")
+        return redirect(url_for("esg.section",report_id=r.id,code=code))
+    return render_template("esg/section_editor.html",report=r,section=sec)
+
+@esg_bp.route("/<int:report_id>/metrics",methods=["GET","POST"])
+@login_required
+def metrics(report_id):
+    owner();r=get_report(report_id)
+    if request.method=="POST":
+        try:
+            editable(r); p=text("pillar");
+            if p not in ("E","S","G") or not text("name"): raise ValueError("Pilastro e nome sono obbligatori.")
+            q=text("data_quality") or "ND"
+            if q not in ("misurato","stimato","ND"): raise ValueError("Qualità dato non valida.")
+            if q=="misurato" and (not text("methodology") or not text("source_ref")): raise ValueError("Un dato misurato richiede metodo e fonte/evidenza.")
+            m=ESGMetric(report_id=r.id,pillar=p,code=text("code"),name=text("name"),value=number("value"),previous_value=number("previous_value"),baseline_value=number("baseline_value"),target_value=number("target_value"),unit=text("unit"),denominator_value=number("denominator_value"),denominator_unit=text("denominator_unit"),formula=text("formula"),data_quality=q,methodology=text("methodology"),source_ref=text("source_ref"),data_owner=text("data_owner"),note=text("note"),visible_in_report=bool(request.form.get("visible_in_report")),is_placeholder=placeholder())
+            db.session.add(m);db.session.commit();flash("KPI aggiunto.","success")
+        except ValueError as e:db.session.rollback();flash(str(e),"error")
+        return redirect(url_for("esg.metrics",report_id=r.id))
+    return render_template("esg/metrics.html",report=r,metrics=sorted(r.metrics,key=lambda x:(x.pillar,x.sort_order,x.name)))
+
+@esg_bp.post("/metrics/<int:metric_id>/delete")
+@login_required
+def delete_metric(metric_id):
+    owner();m=db.get_or_404(ESGMetric,metric_id)
+    try: editable(m.report);db.session.delete(m);db.session.commit();flash("KPI eliminato.","success")
+    except ValueError as e:flash(str(e),"error")
+    return redirect(url_for("esg.metrics",report_id=m.report_id))
+
+@esg_bp.route("/<int:report_id>/topics",methods=["GET","POST"])
+@login_required
+def topics(report_id):
+    owner();r=get_report(report_id)
+    if request.method=="POST":
+        try:
+            editable(r);p=text("pillar");
+            if p not in ("E","S","G") or not text("title"): raise ValueError("Pilastro e titolo sono obbligatori.")
+            db.session.add(ESGTopic(report_id=r.id,code=text("code") or "DA.PERSONALIZZARE",title=text("title"),pillar=p,description=text("description"),organization_score=number("organization_score"),stakeholder_score=number("stakeholder_score"),priority_level=text("priority_level"),owner=text("owner"),is_placeholder=placeholder()));db.session.commit();flash("Tema aggiunto.","success")
+        except ValueError as e:db.session.rollback();flash(str(e),"error")
+        return redirect(url_for("esg.topics",report_id=r.id))
+    return render_template("esg/topics.html",report=r)
+
+@esg_bp.route("/<int:report_id>/actions",methods=["GET","POST"])
+@login_required
+def actions(report_id):
+    owner();r=get_report(report_id)
+    if request.method=="POST":
+        try:
+            editable(r)
+            if not text("title"):raise ValueError("Il titolo dell'azione è obbligatorio.")
+            db.session.add(ESGActionPlan(report_id=r.id,title=text("title"),objective=text("objective"),kpi_code=text("kpi_code"),baseline=text("baseline"),target=text("target"),responsible=text("responsible"),status=text("status") or "pianificato",verification=text("verification"),is_placeholder=placeholder()));db.session.commit();flash("Azione aggiunta.","success")
+        except ValueError as e: db.session.rollback();flash(str(e),"error")
+        return redirect(url_for("esg.actions",report_id=r.id))
+    return render_template("esg/actions.html",report=r)
+
+@esg_bp.route("/<int:report_id>/engagement",methods=["GET","POST"])
+@login_required
+def engagement(report_id):
+    owner(); r=get_report(report_id)
+    if request.method == "POST":
+        try:
+            editable(r)
+            kind=text("kind")
+            if kind == "stakeholder":
+                if not text("category"): raise ValueError("La categoria stakeholder è obbligatoria.")
+                db.session.add(ESGStakeholderEngagement(report_id=r.id,category=text("category"),channel=text("channel"),period=text("period"),expectations=text("expectations"),response=text("response"),is_placeholder=placeholder()))
+            else:
+                if not text("process"): raise ValueError("Il processo è obbligatorio.")
+                db.session.add(ESGProcessIntegration(report_id=r.id,process=text("process"),owner=text("owner"),control=text("control"),frequency=text("frequency"),evidence_ref=text("evidence_ref"),outcome=text("outcome"),is_placeholder=placeholder()))
+            db.session.commit(); flash("Registro aggiornato.","success")
+        except ValueError as e: db.session.rollback(); flash(str(e),"error")
+        return redirect(url_for("esg.engagement",report_id=r.id))
+    return render_template("esg/engagement.html",report=r)
+
+@esg_bp.route("/<int:report_id>/approval",methods=["GET","POST"])
+@login_required
+def approval(report_id):
+    owner();r=get_report(report_id)
+    if request.method=="POST":
+        role=text("role")
+        if not role: flash("Indicare il ruolo dell'approvatore.","error")
+        else:
+            db.session.add(ESGApproval(report_id=r.id,role=role,signer_name=text("signer_name"),method=text("method") or "approvazione autenticata nell'app",decision=text("decision") or "approvato",statement_text=text("statement_text") or "Approvazione interna registrata."));r.status="approvato";r.version="1.0";db.session.commit();flash("Approvazione interna registrata.","success")
+        return redirect(url_for("esg.approval",report_id=r.id))
+    return render_template("esg/approval_page.html",report=r)
+
+@esg_bp.get("/<int:report_id>/print")
+@login_required
+def report_print(report_id):
+    owner();r=get_report(report_id); return render_template("esg/report_print.html",report=r,sections=SECTIONS)
+
+@esg_bp.get("/<int:report_id>/export.csv")
+@login_required
+def export_csv(report_id):
+    owner();r=get_report(report_id);out=StringIO();w=csv.writer(out);w.writerow(["codice","pilastro","nome","corrente","precedente","baseline","target","unita","qualita","metodo","fonte","placeholder"])
+    for m in r.metrics:w.writerow([m.code,m.pillar,m.name,m.value,m.previous_value,m.baseline_value,m.target_value,m.unit,m.data_quality,m.methodology,m.source_ref,m.is_placeholder])
+    return Response(out.getvalue(),mimetype="text/csv",headers={"Content-Disposition":f"attachment; filename=esg-kpi-{r.year}.csv"})
