@@ -65,3 +65,14 @@ class EnvironmentalCompliance(db.Model):
     document_path = db.Column(db.String(300), nullable=True)
     completed_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
+class EnvironmentalDocument(db.Model):
+    """Documento della libreria ambientale ISO 14001 (manuale, procedure, moduli, allegati)."""
+
+    id = db.Column(db.Integer, primary_key=True)
+    category = db.Column(db.String(20), nullable=False)  # manuale | procedura | modulo | allegato
+    code = db.Column(db.String(30), nullable=True)  # es. "PR 8.1.1"
+    title = db.Column(db.String(255), nullable=False)
+    file_path = db.Column(db.String(400), nullable=False, unique=True)
+    uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

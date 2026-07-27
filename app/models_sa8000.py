@@ -77,3 +77,14 @@ class SA8000Audit(db.Model):
     outcome_summary = db.Column(db.Text, nullable=True)
     document_path = db.Column(db.String(300), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
+class SA8000Document(db.Model):
+    """Documento della libreria SA8000 (manuale, procedure, modulistica, allegati)."""
+
+    id = db.Column(db.Integer, primary_key=True)
+    category = db.Column(db.String(20), nullable=False)  # manuale | procedura | modulistica | allegato
+    code = db.Column(db.String(30), nullable=True)  # es. PROC-980, MOD-940-01
+    title = db.Column(db.String(255), nullable=False)
+    file_path = db.Column(db.String(400), nullable=False, unique=True)
+    uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

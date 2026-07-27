@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from flask import Blueprint, abort, flash, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, send_from_directory, url_for
 from flask_login import current_user, login_required
 
 from ..extensions import db
@@ -8,6 +8,7 @@ from ..models_environment import (
     ConsumptionReading,
     EnvironmentalAspect,
     EnvironmentalCompliance,
+    EnvironmentalDocument,
     EnvironmentalTarget,
     WasteRecord,
 )
@@ -211,3 +212,23 @@ def complete_compliance(item_id):
     db.session.commit()
     flash("Adempimento completato.", "success")
     return redirect(url_for("environment.compliance"))
+
+
+@environment_bp.route("/documenti")
+@login_required
+def documents():
+    owner_only()
+    category = request.args.get("categoria", "")
+    query = EnvironmentalDocument.query
+    if category:
+        query = query.filter_by(category=category)
+    docs = query.order_by(EnvironmentalDocument.category, EnvironmentalDocument.code, EnvironmentalDocument.title).all()
+    return render_template("environment/documenti.html", docs=docs, selected_category=category)
+
+
+@environment_bp.route("/documenti/<int:doc_id>/scarica")
+@login_required
+def download_document(doc_id):
+    owner_only()
+    doc = db.get_or_404(EnvironmentalDocument, doc_id)
+    return send_from_directory(current_app.static_folder, doc.file_path, as_attachment=True)

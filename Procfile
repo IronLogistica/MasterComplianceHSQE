@@ -1,1 +1,1 @@
-web: gunicorn 'app:create_app()'
+web: python import_library.py && python seed.py && gunicorn 'app:create_app()'
