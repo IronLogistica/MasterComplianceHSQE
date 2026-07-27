@@ -13,6 +13,7 @@ def create_app():
     from . import models_sa8000  # registra i modelli SA8000
     from . import models_environment  # registra i modelli ambientali (ISO 14001)
     from . import models_esg  # registra i modelli ESG
+    from . import models_library  # registra il modello delle compilazioni paperless
     from .auth.routes import auth_bp
     from .dashboard.routes import dashboard_bp
     from .work.routes import work_bp

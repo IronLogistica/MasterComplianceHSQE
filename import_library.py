@@ -72,11 +72,23 @@ def _import_folder(static_dir, base_dir, category, model_cls):
     return created
 
 
+def _prune_missing(static_dir, model_cls):
+    """Rimuove i record che puntano a file non piu' presenti su disco
+    (es. un .doc sostituito da un .docx dopo una conversione)."""
+    removed = 0
+    for row in model_cls.query.all():
+        if not os.path.isfile(os.path.join(static_dir, row.file_path)):
+            db.session.delete(row)
+            removed += 1
+    return removed
+
+
 def import_library():
     app = create_app()
     with app.app_context():
         static_dir = app.static_folder
         total = 0
+        pruned = _prune_missing(static_dir, SA8000Document) + _prune_missing(static_dir, EnvironmentalDocument)
 
         sa8000_root = os.path.join(static_dir, "library", "sa8000")
         for category, folder in (
@@ -97,6 +109,8 @@ def import_library():
             total += _import_folder(static_dir, os.path.join(env_root, folder), category, EnvironmentalDocument)
 
         db.session.commit()
+        if pruned:
+            print(f"Libreria documentale: {pruned} record obsoleti rimossi (file non piu' presente).")
         if total:
             print(f"Libreria documentale: {total} nuovi documenti importati.")
         else:

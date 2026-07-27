@@ -79,3 +79,9 @@ tbody tr:hover{background:var(--panel-alt)}
 .num-blue{color:var(--blue);font-weight:700}
 @media(max-width:760px){.kanban{grid-template-columns:1fr}.hdr-nav{display:none}}
 @media(max-width:520px){.page{padding:20px 13px 45px}.grid2{grid-template-columns:1fr}.row{align-items:flex-start}.inline-form{flex-wrap:wrap}.inline-form label,.inline-form input{flex:1 1 100%}.metrics{gap:6px}.metric{padding:10px}.metric strong{font-size:1.35rem}header{padding:0 14px}.user{font-size:.7rem}.btn{padding:9px 10px}}
+.doc-viewer{padding:20px;overflow-x:auto;line-height:1.5}
+.doc-viewer table{margin:10px 0;width:auto;min-width:60%}
+.doc-viewer td,.doc-viewer th{border:1px solid var(--line);padding:6px 10px}
+.doc-viewer img{max-width:100%}
+#editable-area{outline:none;min-height:300px}
+#editable-area:focus{box-shadow:0 0 0 2px var(--blue)}

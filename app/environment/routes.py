@@ -1,9 +1,12 @@
+import os
 from datetime import date, datetime
 
 from flask import Blueprint, abort, current_app, flash, redirect, render_template, request, send_from_directory, url_for
 from flask_login import current_user, login_required
 
 from ..extensions import db
+from ..library_tools import document_to_html
+from ..models_library import CompiledModule
 from ..models_environment import (
     ConsumptionReading,
     EnvironmentalAspect,
@@ -232,3 +235,83 @@ def download_document(doc_id):
     owner_only()
     doc = db.get_or_404(EnvironmentalDocument, doc_id)
     return send_from_directory(current_app.static_folder, doc.file_path, as_attachment=True)
+
+
+@environment_bp.route("/documenti/<int:doc_id>/visualizza")
+@login_required
+def view_document(doc_id):
+    owner_only()
+    doc = db.get_or_404(EnvironmentalDocument, doc_id)
+    abs_path = os.path.join(current_app.static_folder, doc.file_path)
+    html = document_to_html(abs_path)
+    return render_template("environment/visualizza.html", doc=doc, html=html)
+
+
+@environment_bp.post("/documenti/<int:doc_id>/compila")
+@login_required
+def start_compilation(doc_id):
+    owner_only()
+    doc = db.get_or_404(EnvironmentalDocument, doc_id)
+    abs_path = os.path.join(current_app.static_folder, doc.file_path)
+    html = document_to_html(abs_path)
+    if html is None:
+        flash("Questo documento non e' ancora convertito in formato compilabile.", "error")
+        return redirect(url_for("environment.documents"))
+    title = f"{doc.code} — {doc.title}" if doc.code else doc.title
+    compiled = CompiledModule(domain="ambiente", source_document_id=doc.id, source_title=title, content_html=html)
+    db.session.add(compiled)
+    db.session.commit()
+    return redirect(url_for("environment.edit_compilation", compilation_id=compiled.id))
+
+
+@environment_bp.route("/compilazioni")
+@login_required
+def compilations():
+    owner_only()
+    items = CompiledModule.query.filter_by(domain="ambiente").order_by(CompiledModule.updated_at.desc()).all()
+    return render_template("environment/compilazioni.html", items=items)
+
+
+@environment_bp.route("/compilazioni/<int:compilation_id>")
+@login_required
+def edit_compilation(compilation_id):
+    owner_only()
+    compiled = db.get_or_404(CompiledModule, compilation_id)
+    if compiled.domain != "ambiente":
+        abort(404)
+    return render_template("environment/compila.html", compiled=compiled)
+
+
+@environment_bp.post("/compilazioni/<int:compilation_id>")
+@login_required
+def save_compilation(compilation_id):
+    owner_only()
+    compiled = db.get_or_404(CompiledModule, compilation_id)
+    if compiled.domain != "ambiente":
+        abort(404)
+    compiled.content_html = request.form.get("content_html", compiled.content_html)
+    db.session.commit()
+    flash("Compilazione salvata.", "success")
+    return redirect(url_for("environment.edit_compilation", compilation_id=compiled.id))
+
+
+@environment_bp.post("/compilazioni/<int:compilation_id>/stato")
+@login_required
+def update_compilation_status(compilation_id):
+    owner_only()
+    compiled = db.get_or_404(CompiledModule, compilation_id)
+    if compiled.domain != "ambiente":
+        abort(404)
+    compiled.status = "completato" if compiled.status != "completato" else "bozza"
+    db.session.commit()
+    return redirect(url_for("environment.compilations"))
+
+
+@environment_bp.route("/compilazioni/<int:compilation_id>/stampa")
+@login_required
+def print_compilation(compilation_id):
+    owner_only()
+    compiled = db.get_or_404(CompiledModule, compilation_id)
+    if compiled.domain != "ambiente":
+        abort(404)
+    return render_template("environment/stampa.html", compiled=compiled)
