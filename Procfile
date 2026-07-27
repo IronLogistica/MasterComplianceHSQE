@@ -1,1 +1,1 @@
-web: python brand_library.py && python import_library.py && python seed.py && gunicorn 'app:create_app()'
+web: python reset_esg_schema.py && python brand_library.py && python import_library.py && python seed.py && gunicorn 'app:create_app()'
