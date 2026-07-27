@@ -214,3 +214,117 @@ def export_csv(report_id):
     owner();r=get_report(report_id);out=StringIO();w=csv.writer(out);w.writerow(["codice","pilastro","nome","corrente","precedente","baseline","target","unita","qualita","metodo","fonte","placeholder"])
     for m in r.metrics:w.writerow([m.code,m.pillar,m.name,m.value,m.previous_value,m.baseline_value,m.target_value,m.unit,m.data_quality,m.methodology,m.source_ref,m.is_placeholder])
     return Response(out.getvalue(),mimetype="text/csv",headers={"Content-Disposition":f"attachment; filename=esg-kpi-{r.year}.csv"})
+
+# --- Wizard ESG operativo: cliente -> evidenze -> KPI -> revisione/firma ---
+@esg_bp.route("/clienti",methods=["GET","POST"])
+@login_required
+def customers():
+    owner();from ..models_esg import ESGCustomer
+    if request.method=="POST":
+        try:
+            name=text("legal_name")
+            if not name:raise ValueError("La ragione sociale è obbligatoria.")
+            employees_raw=text("employees");employees=int(employees_raw) if employees_raw else None
+            if employees is not None and employees<0:raise ValueError("Il numero di addetti non può essere negativo.")
+            email=text("contact_email")
+            if email and ("@" not in email or "." not in email.split("@")[-1]):raise ValueError("Email non valida.")
+            db.session.add(ESGCustomer(legal_name=name,tax_id=text("tax_id"),address=text("address"),sector=text("sector"),employees=employees,contact_name=text("contact_name"),contact_email=email,phone=text("phone"),notes=text("notes")));db.session.commit();flash("Cliente salvato.","success")
+        except (ValueError,TypeError) as e:db.session.rollback();flash(str(e),"error")
+        return redirect(url_for("esg.customers"))
+    q=(request.args.get("q") or "").strip();query=ESGCustomer.query
+    if q:query=query.filter(db.or_(ESGCustomer.legal_name.ilike(f"%{q}%"),ESGCustomer.tax_id.ilike(f"%{q}%"),ESGCustomer.sector.ilike(f"%{q}%")))
+    return render_template("esg/customers.html",items=query.order_by(ESGCustomer.legal_name).all(),q=q or "")
+
+@esg_bp.post("/clienti/<int:customer_id>/modifica")
+@login_required
+def edit_customer(customer_id):
+    owner();from ..models_esg import ESGCustomer;c=db.get_or_404(ESGCustomer,customer_id);name=text("legal_name")
+    if not name:flash("La ragione sociale è obbligatoria.","error")
+    else:
+        c.legal_name=name
+        for f in ("tax_id","address","sector","contact_name","contact_email","phone","notes"):setattr(c,f,text(f))
+        db.session.commit();flash("Anagrafica aggiornata.","success")
+    return redirect(url_for("esg.customers"))
+
+@esg_bp.post("/clienti/<int:customer_id>/elimina")
+@login_required
+def delete_customer(customer_id):
+    owner();from ..models_esg import ESGCustomer
+    c=db.get_or_404(ESGCustomer,customer_id)
+    if c.report_links:flash("Cliente collegato a rapporti: rimuovere prima i collegamenti.","error")
+    else:db.session.delete(c);db.session.commit();flash("Cliente eliminato.","success")
+    return redirect(url_for("esg.customers"))
+
+@esg_bp.route("/<int:report_id>/cliente",methods=["GET","POST"])
+@login_required
+def report_customer(report_id):
+    owner();from ..models_esg import ESGCustomer,ESGReportCustomer;r=get_report(report_id)
+    if request.method=="POST":
+        try:
+            editable(r);cid=int(request.form.get("customer_id",""));c=db.get_or_404(ESGCustomer,cid)
+            if r.customer_link:r.customer_link.customer_id=c.id
+            else:db.session.add(ESGReportCustomer(report_id=r.id,customer_id=c.id))
+            r.legal_name=c.legal_name
+            if c.contact_email:r.contact_email=c.contact_email
+            db.session.commit();flash("Cliente collegato al rapporto.","success")
+        except (ValueError,TypeError):db.session.rollback();flash("Seleziona un cliente valido.","error")
+        return redirect(url_for("esg.report_customer",report_id=r.id))
+    return render_template("esg/report_customer.html",report=r,customers=ESGCustomer.query.order_by(ESGCustomer.legal_name).all())
+
+@esg_bp.route("/<int:report_id>/evidenze",methods=["GET","POST"])
+@login_required
+def evidence(report_id):
+    owner();from ..models_esg import ESGEvidence;r=get_report(report_id)
+    if request.method=="POST":
+        from ..upload_tools import save_upload
+        try:
+            editable(r);title=text("title")
+            if not title:raise ValueError("Il titolo dell'evidenza è obbligatorio.")
+            metric_id=int(request.form["metric_id"]) if request.form.get("metric_id") else None
+            if metric_id and not ESGMetric.query.filter_by(id=metric_id,report_id=r.id).first():raise ValueError("KPI non valido per questo rapporto.")
+            path=save_upload(request.files.get("file"),"esg");db.session.add(ESGEvidence(report_id=r.id,metric_id=metric_id,category=text("category") or "altro",title=title,period=text("period"),source=text("source"),note=text("note"),file_path=path));db.session.commit();flash("Evidenza raccolta.","success")
+        except ValueError as e:db.session.rollback();flash(str(e),"error")
+        return redirect(url_for("esg.evidence",report_id=r.id))
+    q=(request.args.get("q") or "").strip();category=(request.args.get("categoria") or "").strip();query=ESGEvidence.query.filter_by(report_id=r.id)
+    if q:query=query.filter(db.or_(ESGEvidence.title.ilike(f"%{q}%"),ESGEvidence.source.ilike(f"%{q}%"),ESGEvidence.note.ilike(f"%{q}%")))
+    if category:query=query.filter_by(category=category)
+    return render_template("esg/evidence.html",report=r,items=query.order_by(ESGEvidence.uploaded_at.desc()).all(),q=q,category=category)
+
+@esg_bp.post("/evidenze/<int:evidence_id>/modifica")
+@login_required
+def edit_evidence(evidence_id):
+    owner();from ..models_esg import ESGEvidence;e=db.get_or_404(ESGEvidence,evidence_id)
+    try:
+        editable(e.report);e.title=text("title") or e.title;e.category=text("category") or "altro";e.period=text("period");e.source=text("source");e.note=text("note");db.session.commit();flash("Evidenza aggiornata.","success")
+    except ValueError as ex:flash(str(ex),"error")
+    return redirect(url_for("esg.evidence",report_id=e.report_id))
+
+@esg_bp.post("/evidenze/<int:evidence_id>/elimina")
+@login_required
+def delete_esg_evidence(evidence_id):
+    owner();from ..models_esg import ESGEvidence;from ..upload_tools import remove_upload;e=db.get_or_404(ESGEvidence,evidence_id);rid=e.report_id
+    try:editable(e.report);remove_upload(e.file_path);db.session.delete(e);db.session.commit();flash("Evidenza eliminata.","success")
+    except ValueError as ex:flash(str(ex),"error")
+    return redirect(url_for("esg.evidence",report_id=rid))
+
+@esg_bp.route("/metrics/<int:metric_id>/edit",methods=["GET","POST"])
+@login_required
+def edit_metric(metric_id):
+    owner();m=db.get_or_404(ESGMetric,metric_id)
+    if request.method=="POST":
+        try:
+            editable(m.report);m.name=text("name") or m.name;m.value=number("value");m.previous_value=number("previous_value");m.target_value=number("target_value");m.unit=text("unit");m.data_quality=text("data_quality") or "ND";m.methodology=text("methodology");m.source_ref=text("source_ref");m.data_owner=text("data_owner");m.note=text("note")
+            if m.data_quality=="misurato" and (not m.methodology or not m.source_ref):raise ValueError("Un dato misurato richiede metodo e fonte/evidenza.")
+            db.session.commit();flash("KPI aggiornato.","success")
+        except ValueError as e:db.session.rollback();flash(str(e),"error")
+        return redirect(url_for("esg.edit_metric",metric_id=m.id))
+    return render_template("esg/metric_edit.html",report=m.report,metric=m)
+
+@esg_bp.post("/<int:report_id>/stato")
+@login_required
+def update_status(report_id):
+    owner();r=get_report(report_id);new=request.form.get("status")
+    if new not in STATUS:flash("Stato non valido.","error")
+    elif new in ("approvato","pubblicato") and not r.approvals:flash("Per approvare/pubblicare occorre una firma registrata.","error")
+    else:r.status=new;db.session.commit();flash("Stato del wizard aggiornato.","success")
+    return redirect(url_for("esg.dashboard",report_id=r.id))

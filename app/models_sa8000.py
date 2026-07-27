@@ -88,3 +88,13 @@ class SA8000Document(db.Model):
     title = db.Column(db.String(255), nullable=False)
     file_path = db.Column(db.String(400), nullable=False, unique=True)
     uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+class SA8000Evidence(db.Model):
+    """Evidenza allegata a registri SA8000."""
+    id = db.Column(db.Integer, primary_key=True)
+    entity_type = db.Column(db.String(30), nullable=False)
+    entity_id = db.Column(db.Integer, nullable=False, index=True)
+    title = db.Column(db.String(255), nullable=False)
+    note = db.Column(db.Text, nullable=True)
+    file_path = db.Column(db.String(400), nullable=False)
+    uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

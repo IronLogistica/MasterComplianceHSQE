@@ -99,3 +99,4 @@ tbody tr:hover{background:var(--panel-alt)}
 .paper-signature{margin-top:24px;padding-top:18px;border-top:1px dashed var(--line);color:var(--muted)}
 .report-table table{margin-top:10px}
 @media print{.no-print{display:none}.report-shell,.signature-block{border:none;padding:0}body{background:#fff;color:#000}}
+.wizard{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}.inline{display:inline}.badge a{color:inherit}.card form+form{margin-top:10px}@media(max-width:760px){.wizard{grid-template-columns:1fr 1fr}}

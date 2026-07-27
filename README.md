@@ -83,3 +83,6 @@ Anche qui le foto/documenti (attestati, ricevute DPI, POS) vengono salvati in `a
 - aggiungere gestione utenti, ordini e importazione MasterQuality;
 - aggiungere caricamento sicuro di foto e documenti (es. spazio file cloud);
 - definire esattamente frequenze e campi dei controlli per ogni articolo.
+
+## Upgrade operativo compliance
+SA8000 e ISO 14001 includono registri filtrabili, modifica/eliminazione, evidenze con upload validato, azioni correttive e gestione documenti. I moduli convertiti sono compilati tramite campi testuali strutturati (non più `contenteditable`). ESG segue il wizard cliente → evidenze → KPI → rapporto HTML/revisione/firma. Il limite upload è 16 MB e i nomi sono normalizzati e resi univoci.

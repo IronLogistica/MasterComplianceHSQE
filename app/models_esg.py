@@ -142,3 +142,38 @@ class ESGApproval(db.Model):
     decision = db.Column(db.String(50), nullable=True)
     statement_text = db.Column(db.Text, nullable=True)
     signed_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+class ESGCustomer(db.Model):
+    """Anagrafica cliente riutilizzabile nei rapporti ESG."""
+    id = db.Column(db.Integer, primary_key=True)
+    legal_name = db.Column(db.String(255), nullable=False)
+    tax_id = db.Column(db.String(40), nullable=True)
+    address = db.Column(db.String(300), nullable=True)
+    sector = db.Column(db.String(150), nullable=True)
+    employees = db.Column(db.Integer, nullable=True)
+    contact_name = db.Column(db.String(150), nullable=True)
+    contact_email = db.Column(db.String(255), nullable=True)
+    phone = db.Column(db.String(50), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+class ESGReportCustomer(db.Model):
+    report_id = db.Column(db.Integer, db.ForeignKey("esg_report.id"), primary_key=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey("esg_customer.id"), nullable=False, index=True)
+    report = db.relationship("ESGReport", backref=db.backref("customer_link", uselist=False, cascade="all, delete-orphan"))
+    customer = db.relationship("ESGCustomer", backref="report_links")
+
+class ESGEvidence(db.Model):
+    """Dato/evidenza raccolto nel secondo passo del wizard ESG."""
+    id = db.Column(db.Integer, primary_key=True)
+    report_id = db.Column(db.Integer, db.ForeignKey("esg_report.id"), nullable=False, index=True)
+    metric_id = db.Column(db.Integer, db.ForeignKey("esg_metric.id"), nullable=True)
+    category = db.Column(db.String(80), nullable=False, default="altro")
+    title = db.Column(db.String(255), nullable=False)
+    period = db.Column(db.String(100), nullable=True)
+    source = db.Column(db.String(255), nullable=True)
+    note = db.Column(db.Text, nullable=True)
+    file_path = db.Column(db.String(400), nullable=False)
+    uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    report = db.relationship("ESGReport", backref=db.backref("evidence", lazy=True, cascade="all, delete-orphan"))
+    metric = db.relationship("ESGMetric", backref="evidence")

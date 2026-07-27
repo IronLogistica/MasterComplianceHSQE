@@ -76,3 +76,24 @@ class EnvironmentalDocument(db.Model):
     title = db.Column(db.String(255), nullable=False)
     file_path = db.Column(db.String(400), nullable=False, unique=True)
     uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+class EnvironmentalCorrectiveAction(db.Model):
+    """Azione correttiva ambientale associabile a qualunque voce di registro."""
+    id = db.Column(db.Integer, primary_key=True)
+    entity_type = db.Column(db.String(30), nullable=False)
+    entity_id = db.Column(db.Integer, nullable=False, index=True)
+    description = db.Column(db.Text, nullable=False)
+    responsible = db.Column(db.String(150), nullable=True)
+    due_date = db.Column(db.Date, nullable=True)
+    status = db.Column(db.String(30), nullable=False, default="da_fare")
+    evidence_path = db.Column(db.String(400), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+class EnvironmentalEvidence(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    entity_type = db.Column(db.String(30), nullable=False)
+    entity_id = db.Column(db.Integer, nullable=False, index=True)
+    title = db.Column(db.String(255), nullable=False)
+    note = db.Column(db.Text, nullable=True)
+    file_path = db.Column(db.String(400), nullable=False)
+    uploaded_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

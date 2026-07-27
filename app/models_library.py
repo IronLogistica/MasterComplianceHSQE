@@ -18,3 +18,13 @@ class CompiledModule(db.Model):
     status = db.Column(db.String(20), nullable=False, default="bozza")  # bozza | completato
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class CompiledModuleField(db.Model):
+    """Campo strutturato e sicuro di una compilazione digitale."""
+    id = db.Column(db.Integer, primary_key=True)
+    compilation_id = db.Column(db.Integer, db.ForeignKey("compiled_module.id"), nullable=False, index=True)
+    label = db.Column(db.String(255), nullable=False)
+    value = db.Column(db.Text, nullable=True)
+    field_type = db.Column(db.String(20), nullable=False, default="textarea")
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    compilation = db.relationship("CompiledModule", backref=db.backref("fields", lazy=True, cascade="all, delete-orphan", order_by="CompiledModuleField.sort_order"))

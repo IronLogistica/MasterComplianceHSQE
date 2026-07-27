@@ -7,3 +7,6 @@ class Config:
     # Railway fornisce spesso postgres://; SQLAlchemy richiede postgresql://
     SQLALCHEMY_DATABASE_URI = database_url.replace("postgres://", "postgresql://", 1)
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+# Limite applicativo per gli allegati (validato anche da upload_tools).
+Config.MAX_CONTENT_LENGTH = 16 * 1024 * 1024
