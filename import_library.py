@@ -53,19 +53,30 @@ def _parse_name(stem):
     return None, _clean_text(stem)
 
 
+LEGACY_EXTS = {".doc": ".docx", ".xls": ".xlsx"}
+
+
 def _import_folder(static_dir, base_dir, category, model_cls):
     if not os.path.isdir(base_dir):
         return 0
     created = 0
     existing_paths = {p for (p,) in db.session.query(model_cls.file_path).all()}
-    for filename in sorted(os.listdir(base_dir)):
+    all_files = set(os.listdir(base_dir))
+    files_lower = {fn.lower(): fn for fn in all_files}
+    for filename in sorted(all_files):
         full_path = os.path.join(base_dir, filename)
         if not os.path.isfile(full_path):
+            continue
+        stem, ext = os.path.splitext(filename)
+        ext = ext.lower()
+        # Salta i file legacy (.doc/.xls, anche .DOC/.XLS) se esiste gia' il gemello
+        # digitale (.docx/.xlsx): evita di importare due volte lo stesso documento
+        # (vecchio + convertito).
+        if ext in LEGACY_EXTS and (stem + LEGACY_EXTS[ext]).lower() in files_lower:
             continue
         rel_path = os.path.relpath(full_path, start=static_dir).replace(os.sep, "/")
         if rel_path in existing_paths:
             continue
-        stem, _ext = os.path.splitext(filename)
         code, title = _parse_name(stem)
         db.session.add(model_cls(category=category, code=code, title=title, file_path=rel_path))
         created += 1
